@@ -26,8 +26,8 @@ def commit_and_push(files_to_commit=None, repo_path="."):
         commit_message = f"Data update on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         subprocess.run(["git", "commit", "-m", commit_message], check=True)
 
-        # Push to the remote repository
-        subprocess.run(["git", "push"], check=True)
+        # Push to the remote repository and set upstream if not already set
+        subprocess.run(["git", "push", "--set-upstream", "origin", "master"], check=True)
 
         print("✅ Git operations completed successfully.")
 
