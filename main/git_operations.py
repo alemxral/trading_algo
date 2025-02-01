@@ -26,9 +26,13 @@ def commit_and_push(files_to_commit=None, repo_path="."):
         commit_message = f"Data update on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         repo.index.commit(commit_message)
 
+        # Set upstream branch if not already set
+        if repo.active_branch.tracking_branch() is None:
+            repo.git.push('--set-upstream', 'origin', repo.active_branch.name)
+
         # Push to the remote repository
         origin = repo.remote(name='origin')
-        origin.push(refspec='master:master', force=True)
+        origin.push(refspec=f'{repo.active_branch.name}:{repo.active_branch.name}', force=True)
 
         print("✅ Git operations completed successfully.")
 
