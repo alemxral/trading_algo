@@ -2,13 +2,14 @@ import pandas as pd
 
 def calculate_spy_changes(spy_hourly_df):
     """
-    Calculate SPY percentage changes and total volume for different timeframes for each day.
+    Calculate SPY percentage changes, total volume, and additional metrics for each day.
 
     Args:
         spy_hourly_df (pd.DataFrame): DataFrame with SPY hourly data including 'Close' and 'Volume' columns.
 
     Returns:
-        pd.DataFrame: DataFrame with daily metrics for the last 1, 2, 3, and 5 trading days.
+        pd.DataFrame: DataFrame with daily metrics for the last 1, 2, 3, and 5 trading days,
+                      including next-day hourly returns and open indicators.
     """
     # Ensure the datetime index is in UTC format and sorted
     spy_hourly_df.index = pd.to_datetime(spy_hourly_df.index, utc=True)
@@ -39,6 +40,23 @@ def calculate_spy_changes(spy_hourly_df):
                 metrics_df.loc[current_day.index[-1], f'Change_{period}D_%'] = 'N/A'
                 metrics_df.loc[current_day.index[-1], f'Volume_{period}D'] = 'N/A'
 
+        # Next day hourly returns and open indicators
+        if i + 1 < len(daily_df):
+            next_day = daily_df.index[i + 1]
+            next_day_data = spy_hourly_df[next_day:next_day + pd.Timedelta(days=1)]
+
+            for hour in range(1, 4):  # First, second, and third hours
+                if len(next_day_data) >= hour:
+                    open_price = next_day_data['Close'].iloc[0]
+                    hour_close = next_day_data['Close'].iloc[hour - 1]
+                    hourly_return = ((hour_close / open_price) - 1) * 100
+
+                    metrics_df.loc[current_day.index[-1], f'NextDay_Hour{hour}_Return_%'] = round(hourly_return, 2)
+                    metrics_df.loc[current_day.index[-1], f'NextDay_Hour{hour}_Open_Positive'] = int(hourly_return > 0)
+                else:
+                    metrics_df.loc[current_day.index[-1], f'NextDay_Hour{hour}_Return_%'] = 'N/A'
+                    metrics_df.loc[current_day.index[-1], f'NextDay_Hour{hour}_Open_Positive'] = 'N/A'
+
     return metrics_df
 
 # Example usage:
@@ -47,6 +65,7 @@ spy_hourly_df = pd.read_csv(r"C:\Users\pc\Algo\data\spy_hourly.csv", index_col=0
 spy_hourly_df.index = pd.to_datetime(spy_hourly_df.index, utc=True)
 spy_summary_df = calculate_spy_changes(spy_hourly_df)
 print(spy_summary_df)
+
 
 
 spy_summary_df.to_csv(r"C:\Users\pc\Algo\data\spy_summary_df.csv")
