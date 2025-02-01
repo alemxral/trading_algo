@@ -4,14 +4,14 @@ import os
 from datetime import datetime, timedelta
 
 # Import the new Git module
-import trading_algo.main.git_operations as git_operations 
+import main.git_operations as git_operations 
 
 # --- CONFIGURATION ---
 files_to_update = {
-    r"C:\Users\pc\Algo\trading_algo\data\eurusd_hourly.csv": "EURUSD=X",
-    r"C:\Users\pc\Algo\trading_algo\data\ftse_hourly.csv": "^FTSE",
-    r"C:\Users\pc\Algo\trading_algo\data\spy_hourly.csv": "SPY",
-    r"C:\Users\pc\Algo\trading_algo\data\nqsg_hourly.csv": "^NQSG"
+    r"C:\Users\pc\Algo\data\eurusd_hourly.csv": "EURUSD=X",
+    r"C:\Users\pc\Algo\data\ftse_hourly.csv": "^FTSE",
+    r"C:\Users\pc\Algo\data\spy_hourly.csv": "SPY",
+    r"C:\Users\pc\Algo\data\nqsg_hourly.csv": "^NQSG"
 }
 
 # --- FUNCTION TO FETCH AND UPDATE DATA ---
