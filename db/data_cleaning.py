@@ -1,137 +1,155 @@
 import pandas as pd
 
+def read_hourly_data(filepath, utc=True):
+    """
+    Reads a CSV file containing hourly data into a DataFrame,
+    sets the index to a DateTimeIndex, and sorts by the index.
+
+    Args:
+        filepath (str): Path to the CSV file.
+        utc (bool): Whether to convert the datetime index to UTC.
+
+    Returns:
+        pd.DataFrame: A sorted DataFrame with a DateTimeIndex.
+    """
+    df = pd.read_csv(filepath, index_col=0, parse_dates=True)
+    if utc:
+        df.index = pd.to_datetime(df.index, utc=True)
+    return df.sort_index()
+
 
 def calculate_spy_changes(spy_hourly_df):
     """
-    Calculate SPY percentage changes, total volume, and additional metrics for each day.
+    Calculate SPY daily close, percentage changes (for price and volume),
+    and next-day hourly returns.
+
+    For price, for each period (1, 2, 3, 5 days):
+        Price change = (Current day's close / close from 'p' days ago - 1) * 100
+
+    For volume, for each period (p days) the volume change percentage is computed
+    by comparing the sum of volumes for the last p days to the sum for the previous p days:
+        Volume change = ( (sum of last p days) / (sum of previous p days) - 1 ) * 100
 
     Args:
-        spy_hourly_df (pd.DataFrame): DataFrame with SPY hourly data including 'Close', 'Volume',
-                                      and ideally 'Open' columns for the next-day hourly returns calculation.
+        spy_hourly_df (pd.DataFrame): SPY hourly data with 'Close', 'Volume',
+                                      and ideally 'Open' (for next-day returns).
 
     Returns:
-        pd.DataFrame: 
-            DataFrame with daily metrics for the last 1, 2, 3, and 5 trading days,
-            including next-day hourly returns and open indicators.
+        pd.DataFrame:
+            Daily DataFrame with columns:
+                - SPY_Daily_Close
+                - Change_{p}D_%       (price change over p days)
+                - Volume_{p}D_%       (volume change percentage over p days)
+                - NextDay_Hour{h}_Return_% (hourly return for hour h on the next day)
+                - NextDay_Hour{h}_Open_Positive (indicator if the return is positive)
     """
-    # Ensure the datetime index is in UTC format and sorted
-    spy_hourly_df.index = pd.to_datetime(spy_hourly_df.index, utc=True)
-    spy_hourly_df = spy_hourly_df.sort_index()
-
-    # Resample the data to daily frequency:
-    # - last 'Close' of each day
-    # - sum of 'Volume' within the day
-    # NOTE: If you have specific market hours (e.g., 9:30–16:00), you may want to filter
-    #       or handle partial days differently.
+    # Resample hourly data to daily data: last close and sum of volume
     daily_df = (
         spy_hourly_df
         .resample('1D')
         .agg({'Close': 'last', 'Volume': 'sum'})
-        .dropna()  # Drop days without a last close (incomplete days)
+        .dropna()  # Drop days that are missing a closing price
     )
 
-    # Prepare the DataFrame to hold daily metrics
     metrics_df = pd.DataFrame(index=daily_df.index)
+    metrics_df['SPY_Daily_Close'] = daily_df['Close']
 
-    # Calculate metrics for each day
+    # Calculate price and volume changes for each day and period.
     for i in range(1, len(daily_df)):
-        current_day = daily_df.iloc[: i + 1]
+        current_slice = daily_df.iloc[: i + 1]
 
-        # Metrics for different periods
         for period in [1, 2, 3, 5]:
+            # --- Price Change ---
             if i >= period:
-                start_close = current_day['Close'].iloc[-(period + 1)]
-                end_close = current_day['Close'].iloc[-1]
-                change = (end_close / start_close - 1) * 100  # percentage change
-                volume_sum = current_day['Volume'].iloc[-period:].sum()
-
-                metrics_df.loc[current_day.index[-1], f'Change_{period}D_%'] = round(change, 2)
-                metrics_df.loc[current_day.index[-1], f'Volume_{period}D'] = volume_sum
+                start_close = current_slice['Close'].iloc[-(period + 1)]
+                end_close = current_slice['Close'].iloc[-1]
+                price_change = (end_close / start_close - 1) * 100
+                metrics_df.loc[current_slice.index[-1], f'Change_{period}D_%'] = round(price_change, 2)
             else:
-                metrics_df.loc[current_day.index[-1], f'Change_{period}D_%'] = None
-                metrics_df.loc[current_day.index[-1], f'Volume_{period}D'] = None
+                metrics_df.loc[current_slice.index[-1], f'Change_{period}D_%'] = None
 
-        # Next-day hourly returns and open indicators
+            # --- Volume Change (Percentage) ---
+            # Require at least 2*period days to calculate a percentage change
+            if i + 1 >= 2 * period:
+                current_vol = current_slice['Volume'].iloc[-period:].sum()
+                previous_vol = current_slice['Volume'].iloc[-(2 * period):-period].sum()
+                if previous_vol != 0:
+                    vol_change = (current_vol / previous_vol - 1) * 100
+                else:
+                    vol_change = None
+                metrics_df.loc[current_slice.index[-1], f'Volume_{period}D_%'] = round(vol_change, 2) if vol_change is not None else None
+            else:
+                metrics_df.loc[current_slice.index[-1], f'Volume_{period}D_%'] = None
+
+        # --- Next-day Hourly Returns ---
         if i + 1 < len(daily_df):
-            next_day = daily_df.index[i + 1]
-            next_day_data = spy_hourly_df[next_day: next_day + pd.Timedelta(days=1)]
+            next_day_date = daily_df.index[i + 1]
+            next_day_data = spy_hourly_df[next_day_date: next_day_date + pd.Timedelta(days=1)]
 
             if 'Open' not in next_day_data.columns:
-                # If Open is missing, skip or add fallback
-                metrics_df.loc[current_day.index[-1], 'NextDay_Hour1_Return_%'] = None
-                metrics_df.loc[current_day.index[-1], 'NextDay_Hour1_Open_Positive'] = None
-                # Repeat for Hour2, Hour3 as needed
-                continue
-
-            for hour in range(1, 4):  # First 3 hours
-                if len(next_day_data) >= hour:
-                    open_price = next_day_data['Open'].iloc[0]
-                    hour_close = next_day_data['Close'].iloc[hour - 1]
-                    hourly_return = (hour_close / open_price - 1) * 100
-
-                    metrics_df.loc[
-                        current_day.index[-1], f'NextDay_Hour{hour}_Return_%'
-                    ] = round(hourly_return, 2)
-                    metrics_df.loc[
-                        current_day.index[-1], f'NextDay_Hour{hour}_Open_Positive'
-                    ] = int(hourly_return > 0)
-                else:
-                    metrics_df.loc[current_day.index[-1], f'NextDay_Hour{hour}_Return_%'] = None
-                    metrics_df.loc[current_day.index[-1], f'NextDay_Hour{hour}_Open_Positive'] = None
+                # If no Open data, set next-day hourly return fields to None
+                for hour in range(1, 4):
+                    metrics_df.loc[current_slice.index[-1], f'NextDay_Hour{hour}_Return_%'] = None
+                    metrics_df.loc[current_slice.index[-1], f'NextDay_Hour{hour}_Open_Positive'] = None
+            else:
+                for hour in range(1, 4):
+                    if len(next_day_data) >= hour:
+                        open_price = next_day_data['Open'].iloc[0]
+                        hour_close = next_day_data['Close'].iloc[hour - 1]
+                        hourly_return = (hour_close / open_price - 1) * 100
+                        metrics_df.loc[current_slice.index[-1], f'NextDay_Hour{hour}_Return_%'] = round(hourly_return, 2)
+                        metrics_df.loc[current_slice.index[-1], f'NextDay_Hour{hour}_Open_Positive'] = int(hourly_return > 0)
+                    else:
+                        metrics_df.loc[current_slice.index[-1], f'NextDay_Hour{hour}_Return_%'] = None
+                        metrics_df.loc[current_slice.index[-1], f'NextDay_Hour{hour}_Open_Positive'] = None
 
     return metrics_df
 
 
-def calculate_other_symbols(file_path, symbol, periods):
+def calculate_symbol_changes(filepath, symbol, periods):
     """
-    Calculates percentage change and (optionally) rolling volume for a given symbol
-    over specified rolling periods in hours, then aggregates those on a daily basis.
+    Calculates daily close and rolling percentage changes (over specified hours)
+    for non-SPY symbols.
 
     Args:
-        file_path (str): Path to the CSV file containing hourly data with 'Close'
-                         and (optionally) 'Volume' columns.
-        symbol (str): Symbol identifier (e.g., 'EURUSD=X', '^FTSE', etc.).
-        periods (list): List of integers representing the number of hours
-                        for rolling/periodic calculations.
+        filepath (str): Path to the CSV with hourly data (must contain 'Close').
+        symbol (str): Symbol identifier (e.g., 'EURUSD=X', '^FTSE').
+        periods (list): List of integers (hours) for rolling percentage changes.
 
     Returns:
         pd.DataFrame:
-            Daily DataFrame containing the last value of the rolling percentage change
-            and, if available, the sum of volumes for those periods.
+            Daily DataFrame with columns:
+                - {symbol}_Daily_Close
+                - {symbol}_Change_{period}H_%
     """
-    df = pd.read_csv(file_path, index_col=0, parse_dates=True)
-    df.index = pd.to_datetime(df.index, utc=True)
-    df = df.sort_index()
-
-    # Create a daily index based on the mean (or any other aggregator) to ensure we have
-    # a daily frequency. We'll store results in this new DataFrame.
+    df = read_hourly_data(filepath)
     daily_index = df.resample('1D').mean().index
     metrics = pd.DataFrame(index=daily_index)
 
-    # Calculate % change and volume over the given periods
+    # Daily close price
+    daily_close = df['Close'].resample('1D').last()
+    metrics[f'{symbol}_Daily_Close'] = daily_close
+
+    # Rolling percentage changes for specified hours
     for period in periods:
-        change = df['Close'].pct_change(periods=period) * 100
-        metrics[f'{symbol}_Change_{period}H_%'] = change.resample('1D').last()
+        hourly_change = df['Close'].pct_change(periods=period) * 100
+        metrics[f'{symbol}_Change_{period}H_%'] = hourly_change.resample('1D').last()
 
     return metrics
 
 
 def merge_data(spy_df, other_dfs):
     """
-    Merge multiple DataFrames into a single DataFrame using merge_asof.
+    Merge multiple daily DataFrames using a time-based merge_asof.
 
     Args:
-        spy_df (pd.DataFrame): DataFrame for SPY metrics (daily frequency).
-        other_dfs (list):      List of other DataFrames (also daily) to merge.
+        spy_df (pd.DataFrame): SPY DataFrame (daily frequency).
+        other_dfs (list): List of daily DataFrames for other symbols.
 
     Returns:
-        pd.DataFrame:
-            A merged DataFrame containing SPY metrics and the metrics from each
-            of the other DataFrames, aligned by date using 'backward' fill.
+        pd.DataFrame: A merged daily DataFrame.
     """
-    merged_df = spy_df.copy()
-    merged_df = merged_df.sort_index()
-
+    merged_df = spy_df.copy().sort_index()
     for df in other_dfs:
         df = df.sort_index()
         merged_df = pd.merge_asof(
@@ -144,8 +162,31 @@ def merge_data(spy_df, other_dfs):
     return merged_df
 
 
-if __name__ == "__main__":
-    # Updated dictionary to map symbol -> file path
+def fill_missing_values(df):
+    """
+    Fill missing values in the DataFrame by propagating the last valid observation forward.
+    This fills empty fields with the last available value up to that date.
+    
+    Args:
+        df (pd.DataFrame): DataFrame with potential missing values.
+    
+    Returns:
+        pd.DataFrame: DataFrame with missing values filled.
+    """
+    return df.fillna(method='ffill')
+
+
+def main():
+    """
+    Main execution flow:
+      1) Define file paths.
+      2) Calculate SPY changes (price and volume).
+      3) Calculate changes for other symbols.
+      4) Merge the data.
+      5) Fill missing values.
+      6) Export merged data to CSV.
+    """
+    # Map symbol -> file path
     file_paths = {
         "EURUSD=X": r"C:\Users\pc\Algo\data\eurusd_hourly.csv",
         "^FTSE":    r"C:\Users\pc\Algo\data\ftse_hourly.csv",
@@ -153,46 +194,30 @@ if __name__ == "__main__":
         "^NQSG":    r"C:\Users\pc\Algo\data\nqsg_hourly.csv"
     }
 
-    # --- Calculate SPY metrics ---
-    spy_hourly_df = pd.read_csv(
-        file_paths["SPY"],   # Use symbol as the key
-        index_col=0,
-        parse_dates=True
-    )
+    # 1) Calculate SPY metrics
+    spy_hourly_df = read_hourly_data(file_paths["SPY"])
     spy_metrics_df = calculate_spy_changes(spy_hourly_df)
 
-    # --- Calculate metrics for other symbols ---
-    eurusd_metrics = calculate_other_symbols(
-        file_paths["EURUSD=X"],
-        "EURUSD=X",
-        [1, 7, 24]
-    )
-    ftse_metrics = calculate_other_symbols(
-        file_paths["^FTSE"],
-        "^FTSE",
-        [1, 24]
-    )
-    nqsg_metrics = calculate_other_symbols(
-        file_paths["^NQSG"],
-        "^NQSG",
-        [24]
-    )
+    # 2) Calculate metrics for other symbols (volume not included)
+    eurusd_metrics = calculate_symbol_changes(file_paths["EURUSD=X"], "EURUSD=X", [1, 7, 24])
+    ftse_metrics = calculate_symbol_changes(file_paths["^FTSE"], "^FTSE", [1, 24])
+    nqsg_metrics = calculate_symbol_changes(file_paths["^NQSG"], "^NQSG", [24])
 
-    # --- Merge all data ---
+    # 3) Merge all DataFrames
     merged_df = merge_data(spy_metrics_df, [eurusd_metrics, ftse_metrics, nqsg_metrics])
 
-    # Output merged DataFrame
+    # 4) Fill missing values with the last available value (forward fill)
+    merged_df = fill_missing_values(merged_df)
+
+    # 5) Preview & export merged DataFrame
     print(merged_df)
-    # Export merged DataFrame to CSV
     merged_df.to_csv(r"C:\Users\pc\Algo\data\merged_data.csv")
 
-    # Example usage for SPY summary:
-    spy_hourly_df = pd.read_csv(
-        file_paths["SPY"],
-        index_col=0,
-        parse_dates=True
-    )
-    spy_hourly_df.index = pd.to_datetime(spy_hourly_df.index, utc=True)
+    # Example: Export just SPY summary
     spy_summary_df = calculate_spy_changes(spy_hourly_df)
     print(spy_summary_df)
     spy_summary_df.to_csv(r"C:\Users\pc\Algo\data\spy_summary_df.csv")
+
+
+if __name__ == "__main__":
+    main()
